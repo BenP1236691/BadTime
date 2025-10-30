@@ -13,19 +13,20 @@ use wry::WebViewBuilder;
 enum UserEvent {
     CloseAfterWin,
     ExitNow,
+    Reopen,
 }
 
 fn main() -> wry::Result<()> {
-    #[cfg(target_os = "windows")]
-    unsafe {
-        keyboard::install_keyboard_hook();
-    }
     #[cfg(target_os = "windows")]
     {
         ensure_autostart_prompt_once();
     }
     let event_loop: EventLoop<UserEvent> = tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy: EventLoopProxy<UserEvent> = event_loop.create_proxy();
+    #[cfg(target_os = "windows")]
+    unsafe {
+        keyboard::init_with_proxy(proxy.clone());
+    }
 
     let window = WindowBuilder::new()
         .with_title("Sans Gate")
@@ -172,8 +173,7 @@ fn main() -> wry::Result<()> {
                         let _ = proxy_ipc.send_event(UserEvent::CloseAfterWin);
                     }
                 } else if v.get("event").and_then(|e| e.as_str()) == Some("konami") {
-                    // Immediate exit on Konami code
-                    let _ = proxy_ipc.send_event(UserEvent::ExitNow);
+                    // Ignore Konami exit in hardened mode
                 }
             }
         })
@@ -189,7 +189,7 @@ fn main() -> wry::Result<()> {
                 *control_flow = ControlFlow::Exit;
             }
             Event::UserEvent(UserEvent::CloseAfterWin) => {
-                // Sleep 3 seconds, then optionally prompt and close
+                // Sleep 3 seconds, then optionally prompt
                 let proxy2 = proxy.clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(3));
@@ -201,17 +201,41 @@ fn main() -> wry::Result<()> {
                         .set_buttons(rfd::MessageButtons::YesNo)
                         .show();
 
-                    // After showing the message, request exit
-                    let _ = proxy2.send_event(UserEvent::ExitNow);
+                    // No forced exit; keep running
                 });
             }
             Event::UserEvent(UserEvent::ExitNow) => {
+                *control_flow = ControlFlow::Exit;
+            }
+            Event::UserEvent(UserEvent::Reopen) => {
+                // Relaunch a fresh instance and exit this one to avoid duplicates
+                let _ = spawn_new_instance();
+                *control_flow = ControlFlow::Exit;
+            }
+            Event::WindowEvent { event: WindowEvent::Focused(false), .. } => {
+                // On focus loss, relaunch to regain attention
+                let _ = spawn_new_instance();
+                *control_flow = ControlFlow::Exit;
+            }
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                // Reopen if the user tries to close
+                let _ = spawn_new_instance();
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}
         }
     });
 }
+
+#[cfg(target_os = "windows")]
+fn spawn_new_instance() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    std::process::Command::new(exe).spawn()?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn spawn_new_instance() -> std::io::Result<()> { Ok(()) }
 
 #[cfg(target_os = "windows")]
 fn ensure_autostart_prompt_once() {
@@ -303,11 +327,16 @@ fn to_wide(s: &str) -> Vec<u16> {
 #[cfg(target_os = "windows")]
 mod keyboard {
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::OnceLock;
     use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_F4, VK_LWIN, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB};
     use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, SetWindowsHookExW, HHOOK, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN};
+    use tao::event_loop::EventLoopProxy;
+    use super::UserEvent;
 
     static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
+    static PROXY: OnceLock<EventLoopProxy<UserEvent>> = OnceLock::new();
+    static REOPEN_PENDING: AtomicBool = AtomicBool::new(false);
 
     #[no_mangle]
     pub unsafe extern "system" fn low_level_keyboard_proc(nCode: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
@@ -339,6 +368,15 @@ mod keyboard {
                     (ctrl_down && matches_vk(VK_ESCAPE));
 
                 if block {
+                    if let Some(p) = PROXY.get() {
+                        if !REOPEN_PENDING.swap(true, Ordering::SeqCst) {
+                            let _ = p.send_event(UserEvent::Reopen);
+                            std::thread::spawn(|| {
+                                std::thread::sleep(std::time::Duration::from_millis(1000));
+                                REOPEN_PENDING.store(false, Ordering::SeqCst);
+                            });
+                        }
+                    }
                     return LRESULT(1);
                 }
             }
@@ -346,7 +384,8 @@ mod keyboard {
         CallNextHookEx(HHOOK(std::ptr::null_mut()), nCode, w_param, l_param)
     }
 
-    pub unsafe fn install_keyboard_hook() {
+    pub unsafe fn init_with_proxy(proxy: EventLoopProxy<UserEvent>) {
+        let _ = PROXY.set(proxy);
         if HOOK_INSTALLED.swap(true, Ordering::SeqCst) {
             return;
         }
