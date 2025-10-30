@@ -12,12 +12,17 @@ use wry::WebViewBuilder;
 #[derive(Debug, Clone)]
 enum UserEvent {
     CloseAfterWin,
+    ExitNow,
 }
 
 fn main() -> wry::Result<()> {
     #[cfg(target_os = "windows")]
     unsafe {
         keyboard::install_keyboard_hook();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        ensure_autostart_prompt_once();
     }
     let event_loop: EventLoop<UserEvent> = tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy: EventLoopProxy<UserEvent> = event_loop.create_proxy();
@@ -41,17 +46,33 @@ fn main() -> wry::Result<()> {
             try { window.ipc.postMessage(JSON.stringify(obj)); } catch (_) {}
           };
 
-          // Auto press Z after 3 seconds to start the fight
-          setTimeout(() => {
-            try {
-              const down = new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', keyCode: 90, which: 90, bubbles: true });
-              const up   = new KeyboardEvent('keyup',   { key: 'z', code: 'KeyZ', keyCode: 90, which: 90, bubbles: true });
-              document.dispatchEvent(down);
-              window.dispatchEvent(down);
-              document.dispatchEvent(up);
-              window.dispatchEvent(up);
-            } catch (_) {}
-          }, 3000);
+          // One-time reload helper for hotkeys
+          let __hasReloaded = false;
+          const reloadOnce = () => { if (!__hasReloaded) { __hasReloaded = true; try { location.reload(); } catch (_) {} } };
+
+          // Konami code: Up, Up, Down, Down, Left, Right, Left, Right, B, A
+          (function(){
+            const seq = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'];
+            let idx = 0;
+            const matches = (expected, key) => expected.length === 1 ? expected === key.toLowerCase() : expected === key;
+            window.addEventListener('keydown', (e) => {
+              try {
+                const key = (e.key || '').toString();
+                if (matches(seq[idx], key)) {
+                  idx++;
+                  if (idx === seq.length) {
+                    send({ event: 'konami' });
+                    idx = 0;
+                  }
+                } else {
+                  // reset if mismatch, but allow restarting from first on immediate match
+                  idx = matches(seq[0], key) ? 1 : 0;
+                }
+              } catch(_) {}
+            }, { capture: true });
+          })();
+
+          // Removed auto 'Z' press at startup
 
           // Reload after 10 minutes if still running
           const reloadTimer = setTimeout(() => {
@@ -70,8 +91,7 @@ fn main() -> wry::Result<()> {
                   try { clearTimeout(reloadTimer); } catch(_) {}
                   send({ event: 'won' });
                 } else if (text.includes('Loss')) {
-                  // On loss, restart the page to retry immediately
-                  try { setTimeout(() => { location.reload(); }, 500); } catch(_) {}
+                  // No reload on loss
                 }
               } catch (_) {}
               return orig.apply(this, args);
@@ -126,13 +146,13 @@ fn main() -> wry::Result<()> {
               // Ctrl+W (common close-tab in browsers)
               if (e.ctrlKey && (k === 'w')) {
                 e.preventDefault();
-                try { location.reload(); } catch(_) {}
+                try { reloadOnce(); } catch(_) {}
                 return;
               }
               // Alt+F4 (best-effort; OS may close before this runs)
               if (e.altKey && (key === 'F4' || k === 'f4')) {
                 e.preventDefault();
-                try { location.reload(); } catch(_) {}
+                try { reloadOnce(); } catch(_) {}
                 return;
               }
             } catch (_) {}
@@ -141,7 +161,7 @@ fn main() -> wry::Result<()> {
     "#;
 
     let _webview = WebViewBuilder::new(&window)
-        .with_url("https://benp1236691.github.io/BadTime")
+        .with_url("https://benp1236691.github.io/BadtimePage/")
         .with_initialization_script(init_js)
         .with_ipc_handler(move |req| {
             let msg = req.body();
@@ -151,6 +171,9 @@ fn main() -> wry::Result<()> {
                         // First time we saw a win: schedule close after 3 seconds
                         let _ = proxy_ipc.send_event(UserEvent::CloseAfterWin);
                     }
+                } else if v.get("event").and_then(|e| e.as_str()) == Some("konami") {
+                    // Immediate exit on Konami code
+                    let _ = proxy_ipc.send_event(UserEvent::ExitNow);
                 }
             }
         })
@@ -178,12 +201,11 @@ fn main() -> wry::Result<()> {
                         .set_buttons(rfd::MessageButtons::YesNo)
                         .show();
 
-                    // Regardless of response, exit the app after showing message
-                    let _ = proxy2.send_event(UserEvent::CloseAfterWin); // Reuse event to break loop
+                    // After showing the message, request exit
+                    let _ = proxy2.send_event(UserEvent::ExitNow);
                 });
             }
-            // Second arrival of the same event acts as exit signal
-            Event::UserEvent(_) => {
+            Event::UserEvent(UserEvent::ExitNow) => {
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}
@@ -192,11 +214,98 @@ fn main() -> wry::Result<()> {
 }
 
 #[cfg(target_os = "windows")]
+fn ensure_autostart_prompt_once() {
+    use std::fs;
+    use std::path::PathBuf;
+
+    const RUN_VALUE: &str = "SansGate";
+    let mut prompted = false;
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let mut p = PathBuf::from(appdata);
+        p.push("SansGate");
+        let _ = fs::create_dir_all(&p);
+        p.push("autostart_prompted.flag");
+        if p.exists() {
+            prompted = true;
+        } else {
+            if is_autostart_configured(RUN_VALUE).unwrap_or(false) {
+                let _ = fs::write(&p, b"1");
+                prompted = true;
+            } else {
+                let result = rfd::MessageDialog::new()
+                    .set_title("Enable Autostart")
+                    .set_description("Run this app automatically when you sign in?")
+                    .set_buttons(rfd::MessageButtons::YesNo)
+                    .show();
+                match result {
+                    rfd::MessageDialogResult::Yes => { let _ = set_autostart(RUN_VALUE); }
+                    _ => {}
+                }
+                let _ = fs::write(&p, b"1");
+                prompted = true;
+            }
+        }
+    }
+    if !prompted {
+        if !is_autostart_configured("SansGate").unwrap_or(true) {
+            let _ = set_autostart("SansGate");
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_autostart_configured(value_name: &str) -> windows::core::Result<bool> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{RegCloseKey, RegGetValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, RRF_RT_REG_SZ, KEY_READ};
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+
+    let subkey = to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    let name = to_wide(value_name);
+    unsafe {
+        let mut hkey: HKEY = HKEY::default();
+        let open = RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(subkey.as_ptr()), 0, KEY_READ, &mut hkey);
+        if open != ERROR_SUCCESS { return Ok(false); }
+        let mut size: u32 = 0;
+        let status = RegGetValueW(hkey, PCWSTR(std::ptr::null()), PCWSTR(name.as_ptr()), RRF_RT_REG_SZ, None, None, Some(&mut size));
+        let _ = RegCloseKey(hkey);
+        Ok(status == ERROR_SUCCESS)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_autostart(value_name: &str) -> windows::core::Result<()> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ};
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+
+    let subkey = to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    let name = to_wide(value_name);
+    let exe = std::env::current_exe().unwrap_or_default();
+    let exe_str = format!("\"{}\"", exe.display());
+    let data = to_wide(&exe_str);
+    unsafe {
+        let mut hkey: HKEY = HKEY::default();
+        let open = RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(subkey.as_ptr()), 0, KEY_SET_VALUE, &mut hkey);
+        if open != ERROR_SUCCESS { return Ok(()); }
+        let bytes = std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2);
+        let _ = RegSetValueExW(hkey, PCWSTR(name.as_ptr()), 0, REG_SZ, Some(bytes));
+        let _ = RegCloseKey(hkey);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn to_wide(s: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
 mod keyboard {
     use std::sync::atomic::{AtomicBool, Ordering};
     use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_F4, VK_LWIN, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB};
-    use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, SetWindowsHookExW, HHOOK, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN};
+    use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, SetWindowsHookExW, HHOOK, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN};
 
     static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 
