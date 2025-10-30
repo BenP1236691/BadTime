@@ -1,9 +1,14 @@
 [package]
 name = "force-sans"
 version = "0.1.0"
-edition = "2025"
+edition = "2021"
 
 [dependencies]
 wry = "0.44"
 serde_json = "1"
 rfd = "0.14"
+tao = "0.30"
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+] }

@@ -2,12 +2,12 @@ use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 
 use rfd::MessageDialog;
 use serde_json::Value;
-use wry::application::{
+use tao::{
     event::{Event, StartCause, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopProxy},
-    window::{WindowBuilder, Fullscreen},
+    window::{Fullscreen, WindowBuilder},
 };
-use wry::webview::WebViewBuilder;
+use wry::WebViewBuilder;
 
 #[derive(Debug, Clone)]
 enum UserEvent {
@@ -15,12 +15,16 @@ enum UserEvent {
 }
 
 fn main() -> wry::Result<()> {
-    let event_loop: EventLoop<UserEvent> = EventLoop::with_user_event();
+    #[cfg(target_os = "windows")]
+    unsafe {
+        keyboard::install_keyboard_hook();
+    }
+    let event_loop: EventLoop<UserEvent> = tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy: EventLoopProxy<UserEvent> = event_loop.create_proxy();
 
     let window = WindowBuilder::new()
         .with_title("Sans Gate")
-        .with_inner_size(wry::application::dpi::LogicalSize::new(1280.0, 800.0))
+        .with_inner_size(tao::dpi::LogicalSize::new(1280.0, 800.0))
         .build(&event_loop)
         .expect("failed to create window");
 
@@ -136,11 +140,12 @@ fn main() -> wry::Result<()> {
         })();
     "#;
 
-    let _webview = WebViewBuilder::new(window)
-        .with_url("https://benp1236691.github.io/BadTime")?
+    let _webview = WebViewBuilder::new(&window)
+        .with_url("https://benp1236691.github.io/BadTime")
         .with_initialization_script(init_js)
-        .with_ipc_handler(move |_window, msg| {
-            if let Ok(v) = serde_json::from_str::<Value>(&msg) {
+        .with_ipc_handler(move |req| {
+            let msg = req.body();
+            if let Ok(v) = serde_json::from_str::<Value>(msg) {
                 if v.get("event").and_then(|e| e.as_str()) == Some("won") {
                     if !won_flag_ipc.swap(true, Ordering::SeqCst) {
                         // First time we saw a win: schedule close after 3 seconds
@@ -155,7 +160,7 @@ fn main() -> wry::Result<()> {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::NewEvents(StartCause::Init) => {
-                // Nothing extra on init
+                // Nothing extra on init lol
             }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 *control_flow = ControlFlow::Exit;
@@ -184,4 +189,57 @@ fn main() -> wry::Result<()> {
             _ => {}
         }
     });
+}
+
+#[cfg(target_os = "windows")]
+mod keyboard {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::OnceLock;
+    use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::*;
+
+    static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
+    static HOOK_HANDLE: OnceLock<HHOOK> = OnceLock::new();
+
+    #[no_mangle]
+    pub unsafe extern "system" fn low_level_keyboard_proc(nCode: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+        if nCode == HC_ACTION.0 {
+            let kb: &KBDLLHOOKSTRUCT = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
+            let vk = kb.vkCode as u32;
+            let alt_down = (kb.flags & LLKHF_ALTDOWN) == LLKHF_ALTDOWN;
+            let is_keydown = w_param.0 == WM_KEYDOWN as usize || w_param.0 == WM_SYSKEYDOWN as usize;
+
+            // Block common task-switch/system combos (best-effort; OS may still handle some)
+            if is_keydown {
+                let block =
+                    // Alt+Tab and Alt+Esc
+                    (alt_down && (vk == VK_TAB as u32 || vk == VK_ESCAPE as u32)) ||
+                    // Alt+F4
+                    (alt_down && vk == VK_F4 as u32) ||
+                    // Alt+Space
+                    (alt_down && vk == VK_SPACE as u32) ||
+                    // Windows keys
+                    (vk == VK_LWIN as u32 || vk == VK_RWIN as u32) ||
+                    // Win+Tab (we can't easily detect the Win modifier, but we still block Tab with LWIN down via above)
+                    false;
+
+                if block {
+                    return LRESULT(1);
+                }
+            }
+        }
+        CallNextHookEx(HHOOK(0), nCode, w_param, l_param)
+    }
+
+    pub unsafe fn install_keyboard_hook() {
+        if HOOK_INSTALLED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // Install a global low-level keyboard hook.
+        let hhook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), HINSTANCE(0), 0);
+        if let Some(h) = hhook.as_ref() {
+            HOOK_HANDLE.set(*h).ok();
+        }
+        // Note: we purposely do not unhook on exit since the app is single-process and exits entirely.
+    }
 }
