@@ -2,3 +2,4 @@ rust/Cargo.lock
 rust/Cargo.toml
 rust/target/
 rust/.cargo/
+rusttest/

@@ -10,5 +10,6 @@ rfd = "0.14"
 tao = "0.30"
 windows = { version = "0.58", features = [
   "Win32_Foundation",
+  "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
