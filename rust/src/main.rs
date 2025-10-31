@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 
 use rfd::MessageDialog;
@@ -18,7 +20,8 @@ enum UserEvent {
 fn main() -> wry::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        ensure_autostart_prompt_once();
+        ensure_autostart_config_file();
+        apply_autostart_from_config();
     }
     let event_loop: EventLoop<UserEvent> = tao::event_loop::EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy: EventLoopProxy<UserEvent> = event_loop.create_proxy();
@@ -191,33 +194,28 @@ fn main() -> wry::Result<()> {
             }
             
             Event::UserEvent(UserEvent::CloseAfterWin) => {
-                // Sleep briefly after win, then continue running without any close prompt
-                std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_secs(3));
-
-                    // After win, ask about autostart preference (Windows only). Default was enabled on first run.
-                    #[cfg(target_os = "windows")]
-                    {
-                        let keep = MessageDialog::new()
-                            .set_title("Autostart")
-                            .set_description("Keep starting this app automatically when you sign in?")
-                            .set_buttons(rfd::MessageButtons::YesNo)
-                            .show();
-                        if keep == rfd::MessageDialogResult::No {
-                            let _ = remove_autostart("SansGate");
-                        }
-                    }
-
-                    // No forced exit; keep running
-                });
+                // No-op now; autostart prompt happens on window close.
             }
             Event::UserEvent(UserEvent::ExitNow) => {
                 *control_flow = ControlFlow::Exit;
             }
             
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                // Reopen if the user tries to close
-                let _ = spawn_new_instance();
+                // Ask user about autostart and persist preference to file (and registry on Windows)
+                let enable = MessageDialog::new()
+                    .set_title("Autostart")
+                    .set_description("Enable autostart when you sign in?")
+                    .set_buttons(rfd::MessageButtons::YesNo)
+                    .show() == rfd::MessageDialogResult::Yes;
+                let _ = write_autostart_config(enable);
+                #[cfg(target_os = "windows")]
+                {
+                    if enable {
+                        let _ = set_autostart("SansGate");
+                    } else {
+                        let _ = remove_autostart("SansGate");
+                    }
+                }
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}
@@ -234,6 +232,64 @@ fn spawn_new_instance() -> std::io::Result<()> {
 
 #[cfg(not(target_os = "windows"))]
 fn spawn_new_instance() -> std::io::Result<()> { Ok(()) }
+
+fn config_dir() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        return std::env::var_os("APPDATA").map(std::path::PathBuf::from).map(|mut p| { p.push("SansGate"); p });
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| {
+                    let mut p = std::path::PathBuf::from(h);
+                    p.push(".config");
+                    p
+                })
+            });
+        base.map(|mut p| { p.push("SansGate"); p })
+    }
+}
+
+fn autostart_cfg_path() -> Option<std::path::PathBuf> {
+    let mut dir = config_dir()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    dir.push("autostart.txt");
+    Some(dir)
+}
+
+fn read_autostart_config() -> Option<bool> {
+    let p = autostart_cfg_path()?;
+    let s = std::fs::read_to_string(p).ok()?;
+    let v = s.trim().to_ascii_lowercase();
+    match v.as_str() { "true" | "1" | "yes" | "y" => Some(true), "false" | "0" | "no" | "n" => Some(false), _ => None }
+}
+
+fn write_autostart_config(val: bool) -> std::io::Result<()> {
+    if let Some(p) = autostart_cfg_path() { std::fs::write(p, if val { "true" } else { "false" })?; }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_autostart_config_file() {
+    use std::fs;
+    if let Some(p) = autostart_cfg_path() {
+        if !p.exists() {
+            let _ = fs::write(&p, b"true");
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn apply_autostart_from_config() {
+    match read_autostart_config() {
+        Some(true) => { let _ = set_autostart("SansGate"); }
+        Some(false) => { let _ = remove_autostart("SansGate"); }
+        None => {}
+    }
+}
 
 #[cfg(target_os = "windows")]
 fn ensure_autostart_prompt_once() {
