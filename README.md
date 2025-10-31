@@ -13,3 +13,6 @@ Giving Intruders (Or maybe you) a bad time.
 ## Current Known bugs:
 - Reloads forever on close(alt+f4 etc.) hotkeys pressed (Just press z and it will work fine then)
 
+## Credits
+- My dad - for snapping when I put it on his PC
+- You!
