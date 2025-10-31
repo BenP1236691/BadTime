@@ -13,7 +13,6 @@ use wry::WebViewBuilder;
 enum UserEvent {
     CloseAfterWin,
     ExitNow,
-    Reopen,
 }
 
 fn main() -> wry::Result<()> {
@@ -25,17 +24,21 @@ fn main() -> wry::Result<()> {
     let proxy: EventLoopProxy<UserEvent> = event_loop.create_proxy();
     #[cfg(target_os = "windows")]
     unsafe {
-        keyboard::init_with_proxy(proxy.clone());
+        keyboard::install_keyboard_hook();
     }
 
     let window = WindowBuilder::new()
         .with_title("Sans Gate")
+        .with_always_on_top(true)
         .with_inner_size(tao::dpi::LogicalSize::new(1280.0, 800.0))
         .build(&event_loop)
         .expect("failed to create window");
 
     // Force native fullscreen (borderless) at launch
     window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+    // Ensure the window is focused and remains topmost
+    window.set_always_on_top(true);
+    window.set_focus();
 
     let won_flag = Arc::new(AtomicBool::new(false));
     let won_flag_ipc = won_flag.clone();
@@ -179,27 +182,31 @@ fn main() -> wry::Result<()> {
         })
         .build()?;
 
+    
     event_loop.run(move |event, _target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::NewEvents(StartCause::Init) => {
                 // Nothing extra on init lol
             }
-            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                *control_flow = ControlFlow::Exit;
-            }
+            
             Event::UserEvent(UserEvent::CloseAfterWin) => {
-                // Sleep 3 seconds, then optionally prompt
-                let proxy2 = proxy.clone();
+                // Sleep briefly after win, then continue running without any close prompt
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(3));
 
-                    // First-win prompt: offer to close now
-                    let _ = MessageDialog::new()
-                        .set_title("Victory!")
-                        .set_description("You beat Sans. Close the app now?")
-                        .set_buttons(rfd::MessageButtons::YesNo)
-                        .show();
+                    // After win, ask about autostart preference (Windows only). Default was enabled on first run.
+                    #[cfg(target_os = "windows")]
+                    {
+                        let keep = MessageDialog::new()
+                            .set_title("Autostart")
+                            .set_description("Keep starting this app automatically when you sign in?")
+                            .set_buttons(rfd::MessageButtons::YesNo)
+                            .show();
+                        if keep == rfd::MessageDialogResult::No {
+                            let _ = remove_autostart("SansGate");
+                        }
+                    }
 
                     // No forced exit; keep running
                 });
@@ -207,16 +214,7 @@ fn main() -> wry::Result<()> {
             Event::UserEvent(UserEvent::ExitNow) => {
                 *control_flow = ControlFlow::Exit;
             }
-            Event::UserEvent(UserEvent::Reopen) => {
-                // Relaunch a fresh instance and exit this one to avoid duplicates
-                let _ = spawn_new_instance();
-                *control_flow = ControlFlow::Exit;
-            }
-            Event::WindowEvent { event: WindowEvent::Focused(false), .. } => {
-                // On focus loss, relaunch to regain attention
-                let _ = spawn_new_instance();
-                *control_flow = ControlFlow::Exit;
-            }
+            
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 // Reopen if the user tries to close
                 let _ = spawn_new_instance();
@@ -252,22 +250,12 @@ fn ensure_autostart_prompt_once() {
         if p.exists() {
             prompted = true;
         } else {
-            if is_autostart_configured(RUN_VALUE).unwrap_or(false) {
-                let _ = fs::write(&p, b"1");
-                prompted = true;
-            } else {
-                let result = rfd::MessageDialog::new()
-                    .set_title("Enable Autostart")
-                    .set_description("Run this app automatically when you sign in?")
-                    .set_buttons(rfd::MessageButtons::YesNo)
-                    .show();
-                match result {
-                    rfd::MessageDialogResult::Yes => { let _ = set_autostart(RUN_VALUE); }
-                    _ => {}
-                }
-                let _ = fs::write(&p, b"1");
-                prompted = true;
+            // First run: enable autostart silently
+            if !is_autostart_configured(RUN_VALUE).unwrap_or(false) {
+                let _ = set_autostart(RUN_VALUE);
             }
+            let _ = fs::write(&p, b"1");
+            prompted = true;
         }
     }
     if !prompted {
@@ -319,6 +307,24 @@ fn set_autostart(value_name: &str) -> windows::core::Result<()> {
 }
 
 #[cfg(target_os = "windows")]
+fn remove_autostart(value_name: &str) -> windows::core::Result<()> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{RegCloseKey, RegOpenKeyExW, RegDeleteValueW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE};
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+
+    let subkey = to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    let name = to_wide(value_name);
+    unsafe {
+        let mut hkey: HKEY = HKEY::default();
+        let open = RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(subkey.as_ptr()), 0, KEY_SET_VALUE, &mut hkey);
+        if open != ERROR_SUCCESS { return Ok(()); }
+        let _ = RegDeleteValueW(hkey, PCWSTR(name.as_ptr()));
+        let _ = RegCloseKey(hkey);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
     std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
@@ -327,16 +333,11 @@ fn to_wide(s: &str) -> Vec<u16> {
 #[cfg(target_os = "windows")]
 mod keyboard {
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::OnceLock;
     use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_F4, VK_LWIN, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB};
     use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, SetWindowsHookExW, HHOOK, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN};
-    use tao::event_loop::EventLoopProxy;
-    use super::UserEvent;
 
     static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
-    static PROXY: OnceLock<EventLoopProxy<UserEvent>> = OnceLock::new();
-    static REOPEN_PENDING: AtomicBool = AtomicBool::new(false);
 
     #[no_mangle]
     pub unsafe extern "system" fn low_level_keyboard_proc(nCode: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
@@ -368,15 +369,6 @@ mod keyboard {
                     (ctrl_down && matches_vk(VK_ESCAPE));
 
                 if block {
-                    if let Some(p) = PROXY.get() {
-                        if !REOPEN_PENDING.swap(true, Ordering::SeqCst) {
-                            let _ = p.send_event(UserEvent::Reopen);
-                            std::thread::spawn(|| {
-                                std::thread::sleep(std::time::Duration::from_millis(1000));
-                                REOPEN_PENDING.store(false, Ordering::SeqCst);
-                            });
-                        }
-                    }
                     return LRESULT(1);
                 }
             }
@@ -384,8 +376,7 @@ mod keyboard {
         CallNextHookEx(HHOOK(std::ptr::null_mut()), nCode, w_param, l_param)
     }
 
-    pub unsafe fn init_with_proxy(proxy: EventLoopProxy<UserEvent>) {
-        let _ = PROXY.set(proxy);
+    pub unsafe fn install_keyboard_hook() {
         if HOOK_INSTALLED.swap(true, Ordering::SeqCst) {
             return;
         }
