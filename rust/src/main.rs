@@ -1,8 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
-use rfd::MessageDialog;
 use serde_json::Value;
 use tao::{
     event::{Event, StartCause, WindowEvent},
@@ -10,6 +9,15 @@ use tao::{
     window::{Fullscreen, WindowBuilder},
 };
 use wry::WebViewBuilder;
+
+#[cfg(target_os = "windows")]
+use tao::platform::windows::WindowExtWindows;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONINFORMATION};
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::HWND;
+#[cfg(target_os = "windows")]
+use windows::core::PCWSTR;
 
 #[derive(Debug, Clone)]
 enum UserEvent {
@@ -179,7 +187,7 @@ fn main() -> wry::Result<()> {
                         let _ = proxy_ipc.send_event(UserEvent::CloseAfterWin);
                     }
                 } else if v.get("event").and_then(|e| e.as_str()) == Some("konami") {
-                    // Ignore Konami exit in hardened mode
+                    let _ = proxy_ipc.send_event(UserEvent::ExitNow);
                 }
             }
         })
@@ -194,28 +202,23 @@ fn main() -> wry::Result<()> {
             }
             
             Event::UserEvent(UserEvent::CloseAfterWin) => {
-                // No-op now; autostart prompt happens on window close.
+                // No-op; close handled via CloseRequested or ExitNow
             }
             Event::UserEvent(UserEvent::ExitNow) => {
+                #[cfg(target_os = "windows")]
+                {
+                    window.set_always_on_top(false);
+                    unsafe {
+                        let title = to_wide("BadTimeVirus");
+                        let msg = to_wide("Konami Code Detected! Exiting...");
+                        MessageBoxW(HWND(window.hwnd() as _), PCWSTR(msg.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONINFORMATION);
+                    }
+                }
                 *control_flow = ControlFlow::Exit;
             }
             
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                // Ask user about autostart and persist preference to file (and registry on Windows)
-                let enable = MessageDialog::new()
-                    .set_title("Autostart")
-                    .set_description("Enable autostart when you sign in?")
-                    .set_buttons(rfd::MessageButtons::YesNo)
-                    .show() == rfd::MessageDialogResult::Yes;
-                let _ = write_autostart_config(enable);
-                #[cfg(target_os = "windows")]
-                {
-                    if enable {
-                        let _ = set_autostart("SansGate");
-                    } else {
-                        let _ = remove_autostart("SansGate");
-                    }
-                }
+                // Exit immediately without showing an autostart prompt
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}
