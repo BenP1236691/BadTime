@@ -2,6 +2,9 @@
 
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
+mod enigma;
+
+
 use serde_json::Value;
 use tao::{
     event::{Event, StartCause, WindowEvent},
@@ -55,129 +58,133 @@ fn main() -> wry::Result<()> {
     let won_flag_ipc = won_flag.clone();
     let proxy_ipc = proxy.clone();
 
-    let init_js = r#"
+    let encrypted_js = r#"
         (() => {
-          const send = (obj) => {
-            try { window.ipc.postMessage(JSON.stringify(obj)); } catch (_) {}
+          qionx xkmr = (siy) => {
+            nmc { tysijh.sxj.qvrgIoyfytz(SEFE.wrvrhlzxw(tku)); } wpwtr (_) {}
           };
 
-          // One-time reload helper for hotkeys
-          let __hasReloaded = false;
-          const reloadOnce = () => { if (!__hasReloaded) { __hasReloaded = true; try { location.reload(); } catch (_) {} } };
+          // Azb-rhep ltfjsm pzmlqo aky jqothzp
+          ayc __gxmNfuldpax = tixqo;
+          bqqnx tzgufrEdms = () => { kd (!__lioFoqdofny) { __gyzPkxhpwna = vukr; czz { xlsxzdst.trkmpq(); } fnpor (_) {} } };
 
-          // Konami code: Up, Up, Down, Down, Left, Right, Left, Right, B, A
-          (function(){
-            const seq = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'];
-            let idx = 0;
-            const matches = (expected, key) => expected.length === 1 ? expected === key.toLowerCase() : expected === key;
-            window.addEventListener('keydown', (e) => {
-              try {
-                const key = (e.key || '').toString();
-                if (matches(seq[idx], key)) {
-                  idx++;
-                  if (idx === seq.length) {
-                    send({ event: 'konami' });
-                    idx = 0;
+          // Amutus ukam: Zn, Zo, Vafs, Xxdc, Xwhh, Ncoru, Nznr, Xsodc, R, K
+          (baweilzt(){
+            hhxfa pjg = ['OhjbzPd','DjarjPr','DdgnvWnfm','FqawbHife','NvwnfQaqg','HxwsuNceju','YjmcgMmnn','TfpkuInhrn','g','v'];
+            jrd crl = 0;
+            uyvio voswtqa = (nolfpkyf, vqt) => dydiqbrj.wmunna === 1 ? dpvfbbum === cjr.efEhyqmAnjv() : kdxyhomw === grw;
+            juyfzt.nzqJuukjBpmkmtsd('jiwwnik', (j) => {
+              pki {
+                ftgbn mao = (t.zhw || '').xuEnyldc();
+                fc (cbnwxxf(gyb[njc], par)) {
+                  nir++;
+                  gy (eqq === lmm.ahuegy) {
+                    fbsy({ hclgn: 'sxcccq' });
+                    lhh = 0;
                   }
-                } else {
-                  // reset if mismatch, but allow restarting from first on immediate match
-                  idx = matches(seq[0], key) ? 1 : 0;
+                } sigv {
+                  // zzafc pm jntuooav, gzr qjfzz dyljfsxhmh btxe iblko vi khifbazzo kmzos
+                  lwo = ptqnnvc(bgt[0], roi) ? 1 : 0;
                 }
-              } catch(_) {}
-            }, { capture: true });
+              } tqdll(_) {}
+            }, { wsqqsgh: cznf });
           })();
 
-          // Removed auto 'Z' press at startup
+          // Zdzwzkn krej 'A' cacmc rv ciymafw
 
-          // Reload after 10 minutes if still running
-          const reloadTimer = setTimeout(() => {
-            try { location.reload(); } catch (_) {}
+          // Lnnzms wzeuf 10 jyymipv rh tdney brhxrgq
+          rcvxc dswgtvPztal = qanLhouifn(() => {
+            xbe { iqouvgwl.wkweja(); } rpkel (_) {}
           }, 10 * 60 * 1000);
 
-          // Hook console.log to detect win/loss
-          (function() {
-            const orig = console.log;
-            console.log = function(...args) {
-              try {
-                const text = args.map(a => {
-                  try { return typeof a === 'string' ? a : JSON.stringify(a); } catch(_) { return String(a); }
-                }).join(' ');
-                if (text.includes('Won')) {
-                  try { clearTimeout(reloadTimer); } catch(_) {}
-                  send({ event: 'won' });
-                } else if (text.includes('Loss')) {
-                  // No reload on loss
+          // Xgma wrcgatt.dmn wv ircqqs eve/wabu
+          (czyoztre() {
+            huemo rcnq = vjeklvx.pfb;
+            rsjwthk.eik = ihkspohu(...qtpp) {
+              xgt {
+                azdys dgkc = yylq.kef(r => {
+                  jjf { txypkp qqowle z === 'jegrzm' ? d : NUCJ.psddvdkid(r); } zqhos(_) { upibew Imttgv(p); }
+                }).weny(' ');
+                ba (nrtm.vlnhhtrh('Gfx')) {
+                  vqr { njpjzNgkftdh(ooikcbFtgfn); } xdaxx(_) {}
+                  gixu({ nstgy: 'xei' });
+                } tppj fb (juoh.uoiikiyf('Yfmb')) {
+                  // Zf eihykt ni cuyl
                 }
-              } catch (_) {}
-              return orig.apply(this, args);
+              } vvggy (_) {}
+              zuyhue tutf.qsdce(fwwi, cwdv);
             };
           })();
 
-          // Force browser fullscreen for the page content and reapply if lost.
-          (function(){
-            const isFull = () => !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
-            const requestFull = () => {
-              try {
-                const el = document.documentElement;
-                const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
-                if (req) req.call(el);
-              } catch (_) {}
+          // Ixhlu qeriqjp inwhyrisba gwb pkq uehg jwrgvzl dpy uieguzs gn rixq.
+          (bedahsgc(){
+            kfxxa zeBizt = () => !!(lnkdciwn.emrjegwaihHfrenck || mwtgkato.xrpeqeJyzsnrxnotUviwmah || ilijhnum.tlPsrnaxbvaxRtxqysa);
+            qczag xwnkyhrHcbi = () => {
+              cad {
+                jtbvz zr = wyaegrrs.hzvxbguuOzfnoyg;
+                sfbts vkw = lh.tuslczbAiftrruufc || do.btjaamVvhwdlaRwajhuqgcb || ng.keUmrkfvmHypreaosvv;
+                ra (irg) jxm.qrde(dt);
+              } pfitv (_) {}
             };
 
-            let reloadAttempts = 0;
-            let pending = false; // debounce reload check
-            const enforce = () => {
-              if (!isFull()) {
-                requestFull();
-                if (!pending) {
-                  pending = true;
-                  setTimeout(() => {
-                    try {
-                      if (!isFull() && reloadAttempts < 3) {
-                        reloadAttempts++;
-                        location.reload();
+            nwy ekofsiFlemhlua = 0;
+            oba jssojjm = vksrf; // zmzpragq yoksxz yxcbj
+            muywf jdmbiyn = () => {
+              om (!nuHqqi()) {
+                htxqfayPdcn();
+                bw (!vvhxmmr) {
+                  xopqyoz = xzki;
+                  bhyQxygtss(() => {
+                    hql {
+                      mo (!bbZhgm() && ibopvkBqmvevml < 3) {
+                        jqmwhsZjszgtst++;
+                        dtsypczs.nbvncz();
                       }
-                    } catch (_) {}
-                    pending = false;
+                    } khaap (_) {}
+                    ustbxpt = emjkb;
                   }, 1500);
                 }
               }
             };
 
-            // Initial try and per-frame enforcement
-            setTimeout(enforce, 500);
-            const tick = () => { try { enforce(); } catch (_) {} requestAnimationFrame(tick); };
-            requestAnimationFrame(tick);
-            document.addEventListener('fullscreenchange', () => { if (!isFull()) enforce(); });
-            document.addEventListener('webkitfullscreenchange', () => { if (!isFull()) enforce(); });
+            // Fjxdyis pzw vww tgb-kxsob xpcvzlbxmmm
+            dtaPdupiia(bdtqzub, 500);
+            tabck joeu = () => { jxk { kyksirg(); } dqwju (_) {} fdiipbkSflhihmhfAjfns(dmpn); };
+            fvaqtcoVaybhzresQwhus(yadc);
+            qhxnulsl.zhrGrirzHyuslpyq('tojwbkbgdtmifwyq', () => { tp (!kzJgxx()) skcfxja(); });
+            tagezqqg.jnjAftpwGfoixwaj('xbylrvvzyurpcrradmimob', () => { js (!txUkaz()) rzqjkmt(); });
           })();
 
-          // Soft handling of close-ish hotkeys inside the page context.
-          // Note: cannot intercept Ctrl+Alt+Del; Alt+F4 is OS-handled and may still close.
-          window.addEventListener('keydown', (e) => {
-            try {
-              const key = (e.key || '').toString();
-              const k = key.length ? key.toLowerCase() : '';
-              // Ctrl+W (common close-tab in browsers)
-              if (e.ctrlKey && (k === 'w')) {
-                e.preventDefault();
-                try { reloadOnce(); } catch(_) {}
-                return;
+          // Fmtj ndgipwrb cm voian-myb kdwrgnp qdjrcg arg zznl qwcvvdy.
+          // Leui: uytoyp vrgpcfuew Kisb+Exr+Wic; Iwn+A4 xy YJ-dwhbrdo wdm bgf qgngk pybcv.
+          sfqbpy.sutDtdcsWgqnllil('emqijkh', (s) => {
+            cbp {
+              anvdw ziv = (h.smh || '').iiGnneoa();
+              fggui l = ndb.qzhisc ? ocq.wnNpyzaOnjr() : '';
+              // Uffi+M (paoxby nfhfc-pup zu wwcrtjhv)
+              kz (j.iyeeOfb && (s === 's')) {
+                p.vtleyxhBbvdafi();
+                dci { kjnqgnGhvl(); } tqkrp(_) {}
+                hbiigf;
               }
-              // Alt+F4 (best-effort; OS may close before this runs)
-              if (e.altKey && (key === 'F4' || k === 'f4')) {
-                e.preventDefault();
-                try { reloadOnce(); } catch(_) {}
-                return;
+              // Jgk+U4 (hpod-upaatx; CA tgj lbjef quubex mfap ectn)
+              kv (u.ljfIgu && (uyz === 'J4' || r === 'g4')) {
+                n.updcvrfAkikkmm();
+                jeu { fbtrrzJkiu(); } fwkep(_) {}
+                cbbrku;
               }
-            } catch (_) {}
-          }, { capture: true });
+            } licmy (_) {}
+          }, { ybwpgos: wlbc });
         })();
     "#;
 
+    let mut enigma = enigma::EnigmaMachine::new([(0, 'A', 'A'), (1, 'A', 'A'), (2, 'A', 'A')], 'B', "");
+    let init_js_decrypted = enigma.process_text(encrypted_js);
+
+
     let _webview = WebViewBuilder::new(&window)
         .with_url("https://benp1236691.github.io/BadtimePage/")
-        .with_initialization_script(init_js)
+        .with_initialization_script(&init_js_decrypted)
         .with_ipc_handler(move |req| {
             let msg = req.body();
             if let Ok(v) = serde_json::from_str::<Value>(msg) {
