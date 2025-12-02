@@ -183,7 +183,7 @@ fn main() -> wry::Result<()> {
 
 
     let _webview = WebViewBuilder::new(&window)
-        .with_url("https://benp1236691.github.io/BadtimePage/")
+        .with_url("https://benp1236691.github.io/BadTimePage/")
         .with_initialization_script(&init_js_decrypted)
         .with_ipc_handler(move |req| {
             let msg = req.body();
